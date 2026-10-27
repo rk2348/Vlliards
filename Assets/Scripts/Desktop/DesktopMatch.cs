@@ -15,13 +15,14 @@ namespace Vlliards.Desktop
         private void RestartMatch()
         {
             matchRevision++;
+            ResetShotMotion();
             Time.timeScale = 1;
             paused = finished = charging = false;
             winner = null;
             activeShots.Clear();
             contactsThisStep.Clear();
             remaining = 9;
-            shots = scratches = 0;
+            shots = scratches = playerFouls = playerPocketed = 0;
             elapsed = charge = 0;
             foreach (var ball in balls) ball.ResetForMatch();
             player.ResetAt(new Vector3(-1.2f, .3f, -4));
@@ -33,11 +34,12 @@ namespace Vlliards.Desktop
                 for (int column = 0; column < count; column++)
                     balls[index++].ResetAt(new Vector3((column - (count - 1) * .5f) * .57f, .3f, 1.7f + row * .51f));
             }
+            if (practiceMode) opponent.gameObject.SetActive(false);
             cpuThinkAt = Time.time + 1.5f;
             lookYaw = 0; lookPitch = 6; aim = Vector3.forward;
             SetMouseCapture(true);
             UpdateBallView();
-            notice = "Hit the lowest ball first. Legal nine wins. Fouls freeze you for 5 seconds.";
+            notice = "?????????????9??????????????5????";
             noticeUntil = Time.unscaledTime + 7;
         }
 
@@ -51,8 +53,10 @@ namespace Vlliards.Desktop
 
         private bool TryShoot(DesktopBall cue, Vector3 direction, float speed)
         {
-            if (paused || finished || !cue.TryLaunch(direction, speed, launchCooldown)) return false;
+            if (paused || finished || (shell != null && !shell.IsPlaying) || !cue.TryLaunch(direction, speed, launchCooldown)) return false;
             BeginShot(cue);
+            ShowStrike(cue, direction);
+            shell?.Audio.Strike();
             if (cue == player) shots++;
             return true;
         }
@@ -69,6 +73,7 @@ namespace Vlliards.Desktop
         {
             if (paused || finished) return;
             var other = contact.collider.GetComponent<DesktopBall>();
+            if (other != null) shell?.Audio.Impact(contact.relativeVelocity.magnitude);
             if (other == null)
             {
                 // The horizontal surface is not a cushion.
@@ -116,9 +121,13 @@ namespace Vlliards.Desktop
         {
             if (shot.PenaltyApplied) return;
             shot.PenaltyApplied = true;
+            if (shot.Owner == player) playerFouls++;
+            shell?.Audio.Foul();
             shot.Owner.Freeze(foulFreezeSeconds);
             if (shot.Owner == player) { charging = false; charge = 0; }
-            notice = (shot.Owner == player ? "YOU" : "CPU") + " FOUL: " + reason + " / STOP 5s";
+            else { cpuWindingUp = false; cpuCue?.Reset(); }
+            string reasonText = reason == ShotFoul.Scratch ? "?????" : reason == ShotFoul.WrongFirstBall ? "????????????" : reason == ShotFoul.NoObjectBallContact ? "????????????" : "????????????????";
+            notice = (shot.Owner == player ? "??" : "CPU") + "??????" + reasonText + "?5????";
             noticeUntil = Time.unscaledTime + 4;
         }
 
@@ -158,6 +167,8 @@ namespace Vlliards.Desktop
                 else
                 {
                     ball.Pot(pocketCentre);
+                    shell?.Audio.Pocket();
+                    if (ball.Shot != null && ball.Shot.Owner == player) playerPocketed++;
                     remaining--;
                     if (ball.Shot != null && !ball.Shot.Completed) ball.Shot.Rules.RecordObjectBallPocketed(ball.Number);
                     else if (ball.Number == 9) { Respawn(ball, new Vector3(0, .3f, 2)); remaining++; }
@@ -220,9 +231,38 @@ namespace Vlliards.Desktop
 
         private void UpdateCpu()
         {
-            if (testing || !opponent.CanLaunch || Time.time < cpuThinkAt) return;
+            if (testing || practiceMode) return;
+            if (opponent.Frozen || opponent.Potted || !opponent.gameObject.activeInHierarchy)
+            {
+                cpuWindingUp = false;
+                return;
+            }
+            if (cpuWindingUp)
+            {
+                if (!opponent.CanLaunch) { cpuWindingUp = false; return; }
+                float elapsed = Time.time - cpuWindupAt;
+                if (elapsed < cpuWindupSeconds)
+                {
+                    // Commit during the final 0.22s so the player can read and evade the shot.
+                    if (elapsed < cpuWindupSeconds - .22f && PlanCpuShot(out var adjustedAim, out var adjustedPower))
+                    { cpuAim = adjustedAim; cpuPower = adjustedPower; }
+                    return;
+                }
+                cpuWindingUp = false;
+                if (TryShoot(opponent, cpuAim, cpuPower)) cpuThinkAt = Time.time + launchCooldown + CpuRecoveryDelay;
+                return;
+            }
+            if (!opponent.CanLaunch || Time.time < cpuThinkAt || !PlanCpuShot(out cpuAim, out cpuPower)) return;
+            cpuWindingUp = true;
+            cpuWindupAt = Time.time;
+        }
+
+        private bool PlanCpuShot(out Vector3 direction, out float power)
+        {
+            direction = Vector3.forward;
+            power = 0;
             var target = balls.Find(ball => !ball.IsCue && !ball.Potted && ball.Number == MinimumTarget());
-            if (target == null) return;
+            if (target == null) return false;
             Vector3 targetPosition = target.transform.position;
             Vector3 destination = targetPosition;
             float bestAlignment = -2;
@@ -237,12 +277,13 @@ namespace Vlliards.Desktop
                 if (Mathf.Abs(ghost.x) < 3.5f && Mathf.Abs(ghost.z) < 6.5f && alignment > bestAlignment)
                 { bestAlignment = alignment; destination = ghost; }
             }
-            Vector3 direction = destination - opponent.transform.position;
+            direction = destination - opponent.transform.position;
             direction.y = 0;
             // Small deterministic error keeps the CPU fallible, with exactly the same cooldown and fouls.
-            direction = Quaternion.Euler(0, Mathf.Sin(Time.time * 1.7f) * 1.5f, 0) * direction;
-            if (TryShoot(opponent, direction, Mathf.Clamp(direction.magnitude * 1.6f, 5, 14)))
-                cpuThinkAt = Time.time + launchCooldown + .6f;
+            direction = Quaternion.Euler(0, Mathf.Sin(Time.time * 1.7f) * CpuAimError, 0) * direction;
+            power = Mathf.Clamp(direction.magnitude * 1.6f, 5, 14);
+            direction.Normalize();
+            return true;
         }
 
         private static string BallStatus(DesktopBall cue)

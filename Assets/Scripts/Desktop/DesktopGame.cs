@@ -27,18 +27,24 @@ namespace Vlliards.Desktop
         private float noticeUntil = 7;
         private Material ballMaterial;
         private PhysicsMaterial bounce;
-        private GUIStyle titleStyle, bodyStyle, smallStyle;
 
         private void Start()
         {
             Application.targetFrameRate = 90;
             Time.timeScale = 1;
             BuildArena();
-            Restart();
-            if (Array.IndexOf(Environment.GetCommandLineArgs(), "--desktop-smoke") >= 0)
-                StartCoroutine(SmokeTest());
-            if (Array.IndexOf(Environment.GetCommandLineArgs(), "--desktop-preview") >= 0)
-                StartCoroutine(CapturePreview());
+            var arguments = Environment.GetCommandLineArgs();
+            bool mechanics = Array.IndexOf(arguments, "--desktop-smoke") >= 0;
+            bool worldPreview = Array.IndexOf(arguments, "--desktop-preview") >= 0 || Array.IndexOf(arguments, "--shot-motion-preview") >= 0;
+            bool shellTest = Array.IndexOf(arguments, "--shell-smoke") >= 0;
+            bool shellPreview = Array.IndexOf(arguments, "--shell-preview") >= 0;
+            if (mechanics || worldPreview) Restart();
+            else InitializeApplication(shellTest || shellPreview);
+            if (mechanics) StartCoroutine(SmokeTest());
+            if (shellTest) StartCoroutine(VerifyApplicationFlow());
+            if (shellPreview) StartCoroutine(CaptureApplicationPreview());
+            if (Array.IndexOf(arguments, "--shot-motion-preview") >= 0) StartCoroutine(CaptureShotMotionPreview());
+            else if (worldPreview) StartCoroutine(CapturePreview());
         }
 
         private Material Material(Color color, float metallic = 0)
@@ -112,6 +118,7 @@ namespace Vlliards.Desktop
             if (music != null)
             {
                 var audio = gameObject.AddComponent<AudioSource>();
+                musicPlayer = audio;
                 audio.clip = music;
                 audio.loop = true;
                 audio.volume = .12f;
@@ -124,6 +131,7 @@ namespace Vlliards.Desktop
             Color[] colors = { Color.yellow, new Color(.1f,.3f,1), Color.red, new Color(.6f,.2f,.8f),
                 new Color(1,.45f,.1f), new Color(.1f,.65f,.3f), new Color(.55f,.08f,.08f), new Color(.06f,.06f,.08f), Color.yellow };
             for (int i = 1; i <= 9; i++) CreateBall(i, colors[i - 1]);
+            CreateShotMotion();
         }
 
         private DesktopBall CreateBall(int number, Color color)
@@ -154,9 +162,10 @@ namespace Vlliards.Desktop
                 if (!paused && !finished) { elapsed += Time.deltaTime; CheckPockets(); ResolveShots(); }
                 return;
             }
+            if (shell != null && !shell.IsPlaying) { aimLine.enabled = false; return; }
             var keyboard = Keyboard.current;
-            if (keyboard != null && keyboard.rKey.wasPressedThisFrame) Restart();
-            if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame && !finished)
+            if (shell == null && keyboard != null && keyboard.rKey.wasPressedThisFrame) Restart();
+            if (shell == null && keyboard != null && keyboard.escapeKey.wasPressedThisFrame && !finished)
             {
                 paused = !paused;
                 charging = false;
@@ -168,7 +177,7 @@ namespace Vlliards.Desktop
             UpdateCpu();
             ReadBallViewInput();
             if (keyboard != null && keyboard.spaceKey.wasPressedThisFrame) Launch(12);
-            aimLine.enabled = !player.Frozen;
+            aimLine.enabled = !player.Frozen && (appliedPreferences == null || appliedPreferences.showGuide);
             aimLine.SetPosition(0, player.transform.position + aim * .35f - Vector3.up * .1f);
             aimLine.SetPosition(1, player.transform.position + aim * (1.4f + charge * 2.2f) - Vector3.up * .1f);
             CheckPockets();
@@ -177,7 +186,7 @@ namespace Vlliards.Desktop
 
         private void FixedUpdate()
         {
-            if (testing || paused || finished || player == null) return;
+            if (testing || paused || finished || player == null || (shell != null && !shell.IsPlaying)) return;
             var keyboard = Keyboard.current;
             if (keyboard == null || player.Frozen) return;
             Vector3 input = ViewRelativeMovement(new Vector2((keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0),
@@ -199,58 +208,8 @@ namespace Vlliards.Desktop
         {
             if (!focused && !Application.isBatchMode && !testing && !finished)
             {
-                charging = false; charge = 0; paused = true; Time.timeScale = 0; SetMouseCapture(false);
-            }
-        }
-
-        private void OnGUI()
-        {
-            if (titleStyle == null)
-            {
-                titleStyle = new GUIStyle(GUI.skin.label) { fontSize = 30, fontStyle = FontStyle.Bold };
-                bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 18, wordWrap = true };
-                smallStyle = new GUIStyle(GUI.skin.label) { fontSize = 14, wordWrap = true };
-            }
-            float scale = Mathf.Min(Screen.width / 1280f, Screen.height / 800f);
-            GUI.matrix = Matrix4x4.Scale(Vector3.one * scale);
-            float width = Screen.width / scale, height = Screen.height / scale;
-            foreach (var ball in balls)
-            {
-                if (ball.Potted || ball == player) continue;
-                Vector3 screen = view.WorldToScreenPoint(ball.transform.position + Vector3.up * .38f);
-                if (screen.z <= view.nearClipPlane || screen.x < 0 || screen.x > Screen.width || screen.y < 0 || screen.y > Screen.height) continue;
-                GUI.Label(new Rect(screen.x / scale - 12, (Screen.height - screen.y) / scale - 10, 50, 24), ball.IsCue ? (ball == player ? "YOU" : "CPU") : ball.Number.ToString(), smallStyle);
-            }
-            if (!paused && !finished) GUI.Label(new Rect(width / 2 - 6, height / 2 - 12, 24, 24), "+", bodyStyle);
-            DrawRadar(width);
-            GUI.Box(new Rect(24, 20, 300, 184), "");
-            GUI.Label(new Rect(42, 30, 270, 44), "VLLIARDS / VS CPU", titleStyle);
-            GUI.Label(new Rect(42, 80, 270, 32), "NEXT TARGET  " + MinimumTarget(), bodyStyle);
-            GUI.Label(new Rect(42, 114, 270, 28), "TIME  " + TimeSpan.FromSeconds(elapsed).ToString(@"mm\:ss"), bodyStyle);
-            GUI.Label(new Rect(42, 148, 270, 36), "LAUNCHES " + shots + "    SCRATCHES " + scratches, smallStyle);
-            GUI.Box(new Rect(24, 214, 300, 45), BallStatus(player));
-            GUI.Box(new Rect(width - 290, 20, 266, 80), "CPU");
-            GUI.Label(new Rect(width - 275, 54, 240, 35), BallStatus(opponent), bodyStyle);
-            GUI.Box(new Rect(24, height - 114, 350, 90), "");
-            GUI.Label(new Rect(40, height - 104, 320, 76), "WASD  Move relative to your view\nMOUSE  Look / Hold LMB + release to launch\nSPACE  Quick launch    R  Restart    ESC  Pause", smallStyle);
-            if (charging)
-            {
-                GUI.Box(new Rect(width / 2 - 140, height - 65, 280, 35), "POWER " + Mathf.RoundToInt(charge * 100) + "%");
-            }
-            if (!finished && Time.unscaledTime < noticeUntil)
-                GUI.Label(new Rect(width / 2 - 240, 28, 480, 70), notice, bodyStyle);
-            if (paused || finished)
-            {
-                Rect panel = new Rect(width / 2 - 220, height / 2 - 125, 440, 250);
-                GUI.Box(panel, "");
-                GUI.Label(new Rect(panel.x + 30, panel.y + 22, 390, 48), finished ? (winner == player ? "YOU WIN" : "CPU WINS") : "PAUSED", titleStyle);
-                GUI.Label(new Rect(panel.x + 30, panel.y + 78, 380, 50), finished ? "Legal nine-ball pocketed. " + shots + " launches." : "Take your time. The table is waiting.", bodyStyle);
-                if (GUI.Button(new Rect(panel.x + 30, panel.y + 145, 180, 45), finished ? "PLAY AGAIN" : "RESUME"))
-                {
-                    if (finished) Restart();
-                    else { paused = false; Time.timeScale = 1; SetMouseCapture(true); }
-                }
-                if (GUI.Button(new Rect(panel.x + 230, panel.y + 145, 180, 45), "QUIT")) Application.Quit();
+                if (shell != null) shell.Pause();
+                else { charging = false; charge = 0; paused = true; Time.timeScale = 0; SetMouseCapture(false); }
             }
         }
 
@@ -264,6 +223,7 @@ namespace Vlliards.Desktop
             var imageTarget = new RenderTexture(1280, 800, 24);
             var previous = RenderTexture.active;
             view.targetTexture = imageTarget;
+            Canvas.ForceUpdateCanvases();
             view.Render();
             yield return null;
             view.Render();
@@ -287,6 +247,6 @@ namespace Vlliards.Desktop
 #endif
         }
 
-        private void OnDestroy() { Time.timeScale = 1; SetMouseCapture(false); }
+        private void OnDestroy() { DisposeApplication(); Time.timeScale = 1; SetMouseCapture(false); }
     }
 }

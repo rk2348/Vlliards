@@ -20,6 +20,7 @@ namespace Vlliards.Desktop
             foreach (var renderer in model.GetComponentsInChildren<Renderer>())
             {
                 string lower = renderer.name.ToLowerInvariant();
+                if (lower == "stick1") cueArtwork = renderer.GetComponent<MeshFilter>();
                 if (lower == "green_floor") cloth = renderer;
                 if (lower.StartsWith("ball"))
                 {

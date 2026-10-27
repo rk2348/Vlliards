@@ -26,7 +26,7 @@ namespace Vlliards.Desktop
             }
             Vector2 delta = mouse.delta.ReadValue();
             lookYaw += delta.x * mouseSensitivity;
-            lookPitch = Mathf.Clamp(lookPitch - delta.y * mouseSensitivity, -50, 50);
+            lookPitch = Mathf.Clamp(lookPitch - delta.y * mouseSensitivity * (appliedPreferences != null && appliedPreferences.invertY ? -1 : 1), -50, 50);
             aim = Quaternion.Euler(0, lookYaw, 0) * Vector3.forward;
             if (mouse.leftButton.wasPressedThisFrame && player.CanLaunch) { charging = true; charge = 0; }
             if (player.Frozen) { charging = false; charge = 0; }
@@ -46,7 +46,9 @@ namespace Vlliards.Desktop
         private void LateUpdate()
         {
             if (view == null || player == null) return;
+            if (titleCamera) { RenderTitleCamera(); return; }
             UpdateBallView();
+            UpdateShotMotion();
         }
 
         private void UpdateBallView()
@@ -56,24 +58,5 @@ namespace Vlliards.Desktop
                 Quaternion.Euler(lookPitch, lookYaw, 0));
         }
 
-        private void DrawRadar(float width)
-        {
-            Rect frame = new Rect(width - 170, 118, 146, 236);
-            GUI.Box(frame, "TABLE");
-            Rect cloth = new Rect(frame.x + 12, frame.y + 30, 122, 192);
-            var previous = GUI.color;
-            GUI.color = new Color(.05f, .22f, .17f);
-            GUI.DrawTexture(cloth, Texture2D.whiteTexture);
-            foreach (var ball in balls)
-            {
-                if (ball.Potted) continue;
-                Vector3 position = ball.transform.position;
-                float x = cloth.x + Mathf.InverseLerp(-4.5f, 4.5f, position.x) * cloth.width;
-                float y = cloth.y + Mathf.InverseLerp(7.5f, -7.5f, position.z) * cloth.height;
-                GUI.color = ball == player ? Color.white : ball == opponent ? Color.cyan : ball.Number == MinimumTarget() ? Color.yellow : new Color(.65f, .65f, .65f);
-                GUI.DrawTexture(new Rect(x - 3, y - 3, 6, 6), Texture2D.whiteTexture);
-            }
-            GUI.color = previous;
-        }
     }
 }

@@ -80,15 +80,10 @@ namespace Vlliards.Desktop
             Restart();
             bool restart = !finished && remaining == 9 && player.CanLaunch && opponent.CanLaunch && activeShots.Count == 0;
 
-            // Exercise the actual CPU decision path and independent simultaneous shots.
-            testing = false;
-            cpuThinkAt = Time.time;
-            TryShoot(player, Vector3.forward, 8);
-            UpdateCpu();
-            bool cpuShoots = opponent.Shot != null && opponent.CooldownRemaining > 0 && player.CooldownRemaining > 0;
-            testing = true;
-            bool success = pocketShotsPassed == 6 && launched && cooldown && independent && collision && freeze && immobilized && illegalNine && pauseSafe && recovered && cpuPenalty && win && cpuWin && restart && cpuShoots && ballView && relativeMovement && noRoll && artwork;
-            string report = $"DESKTOP_SMOKE {(success ? "PASS" : "FAIL")}: naturalPocketShots={pocketShotsPassed}/6, collision={collision}, cooldown={cooldown}, independent={independent}, freeze={freeze}, immobile={immobilized}, illegalNine={illegalNine}, pause={pauseSafe}, recovery={recovered}, cpuFoul={cpuPenalty}, win={win}, cpuWin={cpuWin}, restart={restart}, cpuShoots={cpuShoots}, ballView={ballView}, relativeMovement={relativeMovement}, noRoll={noRoll}, originalArtwork={artwork}";
+            yield return VerifyShotMotion();
+            bool cpuShoots = motionCpuShoots;
+            bool success = shotMotionPassed && pocketShotsPassed == 6 && launched && cooldown && independent && collision && freeze && immobilized && illegalNine && pauseSafe && recovered && cpuPenalty && win && cpuWin && restart && cpuShoots && ballView && relativeMovement && noRoll && artwork;
+            string report = $"DESKTOP_SMOKE {(success ? "PASS" : "FAIL")}: shotMotion={shotMotionPassed}, naturalPocketShots={pocketShotsPassed}/6, collision={collision}, cooldown={cooldown}, independent={independent}, freeze={freeze}, immobile={immobilized}, illegalNine={illegalNine}, pause={pauseSafe}, recovery={recovered}, cpuFoul={cpuPenalty}, win={win}, cpuWin={cpuWin}, restart={restart}, cpuShoots={cpuShoots}, ballView={ballView}, relativeMovement={relativeMovement}, noRoll={noRoll}, originalArtwork={artwork}";
             Debug.Log(report);
 #if UNITY_EDITOR
             System.IO.File.WriteAllText("Temp/DesktopPlayModeResult.txt", report);
